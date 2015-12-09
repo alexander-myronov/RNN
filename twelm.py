@@ -20,12 +20,13 @@ def tanimoto(X, W, b=None):
     WW = np.abs(W).sum(axis=1).reshape((1, -1))
     return XW / (XX + WW - XW)
 
+
 def kulczynski2(X, W, b=None):
     """ Tanimoto similarity function """
     XW = X.dot(W.T)
     XX = np.abs(X).sum(axis=1).reshape((-1, 1))
     WW = np.abs(W).sum(axis=1).reshape((1, -1))
-    return 0.5*XW *(1.0/XX + 1.0/WW)
+    return 0.5 * XW * (1.0 / XX + 1.0 / WW)
 
 
 metric = {
@@ -96,6 +97,12 @@ class ELM(object):
             self.metric_name = params['f']
             self.f = metric[self.metric_name]
         return self
+
+    def __getstate__(self):
+        return self.get_params()
+
+    def __setstate__(self, params):
+        self.set_params(params)
 
 
 class XELM(ELM):
