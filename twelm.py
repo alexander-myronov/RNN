@@ -1,8 +1,5 @@
 """
-Implementation assumes that there are TWO LABELS, namely -1 and +1.
-If you have different labels you have to preproess them. Furthermore
-be sure to correctly set "balanced" hyperparameter accordingly to the
-metric you want to optimize
+Models and metrics
 """
 
 from __future__ import division
@@ -22,16 +19,24 @@ def tanimoto(X, W, b=None):
 
 
 def kulczynski2(X, W, b=None):
-    """ Tanimoto similarity function """
+    """ Kulczynski2 similarity function """
     XW = X.dot(W.T)
     XX = np.abs(X).sum(axis=1).reshape((-1, 1))
     WW = np.abs(W).sum(axis=1).reshape((1, -1))
     return 0.5 * XW * (1.0 / XX + 1.0 / WW)
 
 
+def euclidean(X, W, b=None):
+    X = X.toarray()  # TODO calc pairwise distance for sparse matrices
+    W = W.toarray()
+    d = cdist(X, W, metric='euclidean')
+    return d
+
+
 metric = {
     'tanimoto': tanimoto,
     'kulczynski2': tanimoto,
+    'euclidean': euclidean
 
 }
 
@@ -115,7 +120,7 @@ class XELM(ELM):
         if hidden_layer is not None:
             print(X.shape)
             raise NotImplementedError()
-            W = hidd
+            # W = hidd
         else:
             W = X[np.random.choice(range(X.shape[0]), size=h, replace=False)]
         b = np.random.normal(size=h)
@@ -123,7 +128,7 @@ class XELM(ELM):
 
 
 class TWELM(XELM):
-    """ 
+    """
     TWELM* model from
 
     "Weighted Tanimoto Extreme Learning Machine with case study of Drug Discovery"
@@ -133,11 +138,6 @@ class TWELM(XELM):
     def __init__(self, h, C=10000, random_state=None):
         super(self.__class__, self).__init__(h=h, C=C, f='tanimoto', random_state=random_state,
                                              balanced=True)
-
-
-def euclid(X, W, b=None):
-    d = cdist(X, W, metric='cityblock')
-    return d
 
 
 class ELMRegressor(XELM):
@@ -157,8 +157,9 @@ class ELMRegressor(XELM):
 
 
 class RBFNet(XELM):
-    def __init__(self, h, f='tanimoto', C=10000, b=1, random_state=None):
-        super(self.__class__, self).__init__(h, C, f, random_state, balanced=False)
+    def __init__(self, h, f='euclidean', C=10000, b=1, random_state=None):
+        super(self.__class__, self).__init__(h, C, f='euclidean', random_state=random_state,
+                                             balanced=False)
         self.b = b  # np.random.uniform(0.4, 2.4, size=h)
 
     def rbf(self, dist):
@@ -166,7 +167,7 @@ class RBFNet(XELM):
 
     def fit(self, X, y, hidden_layer=None):
         """ Fits ELM to training samples X and labels y """
-        self.W, self.b = self._hidden_init(X, y, hidden_layer)
+        self.W, _ = self._hidden_init(X, y, hidden_layer)
         H = self.f(X, self.W, self.b)
         H = self.rbf(H)
 
@@ -178,11 +179,10 @@ class RBFNet(XELM):
         return np.array(np.sign(H.dot(self.beta)).tolist())
 
     def get_params(self, deep=True):
-        params = super(self.__class__, self).get_params(deep)
-        params['b'] = self.b
-        return params
+        return {'h': self.h, 'C': self.C, 'b': self.b}
 
     def set_params(self, **params):
-        super(self.__class__, self).set_params(**params)
         self.b = params['b']
+        self.h = params['h']
+        self.C = params['C']
         return self
