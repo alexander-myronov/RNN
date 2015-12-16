@@ -5,9 +5,11 @@ Models and metrics
 from __future__ import division
 import numpy as np
 from scipy import linalg as la
+import scipy
 from scipy.sparse import csr_matrix
 from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator
+from sklearn.covariance import LedoitWolf
 
 
 def tanimoto(X, W, b=None):
@@ -27,10 +29,17 @@ def kulczynski2(X, W, b=None):
 
 
 def euclidean(X, W, b=None):
-    X = X.toarray()  # TODO calc pairwise distance for sparse matrices
-    W = W.toarray()
+    # TODO calc pairwise distance for sparse matrices
+    if scipy.sparse.issparse(X):
+        X = X.toarray()
+    if scipy.sparse.issparse(W):
+        W = W.toarray()
     d = cdist(X, W, metric='euclidean')
     return d
+
+
+def gaussian(x, mu, sigma):
+    return np.exp(np.power((x - mu), 2) / (-2 * sigma)) / (sigma * np.sqrt(2 * np.pi))
 
 
 metric = {
@@ -118,9 +127,8 @@ class XELM(ELM):
 
         np.random.seed(self.rs)
         if hidden_layer is not None:
-            print(X.shape)
-            raise NotImplementedError()
-            # W = hidd
+            #print('using hidden layer')
+            W = hidden_layer[:h]
         else:
             W = X[np.random.choice(range(X.shape[0]), size=h, replace=False)]
         b = np.random.normal(size=h)
@@ -186,3 +194,41 @@ class RBFNet(XELM):
         self.h = params['h']
         self.C = params['C']
         return self
+
+
+class EEM(XELM):
+    def __init__(self, h, f, C=10000, random_state=666):
+        super(self.__class__, self).__init__(h=h, C=C, f=f, random_state=random_state,
+                                             balanced=False)
+
+    def fit(self, X, y, hidden_layer=None):
+        self.W, self.b = self._hidden_init(X, y, hidden_layer)
+        H = self.f(X, self.W, self.b)
+
+        plus_indices = y == 1
+        H_plus = H[plus_indices]
+        H_minus = H[~plus_indices]
+
+        self.m_plus = np.mean(H_plus, axis=0).T
+        self.m_minus = np.mean(H_minus, axis=0).T
+
+        self.sigma_plus = LedoitWolf().fit(H_plus).covariance_
+        self.sigma_minus = LedoitWolf().fit(H_minus).covariance_
+
+        if self.C is not None:
+            self.sigma_plus += (np.eye(len(self.sigma_plus)) / 2*self.C)
+            self.sigma_minus += (np.eye(len(self.sigma_minus)) / 2*self.C)
+
+        mean_diff = self.m_plus - self.m_minus
+        self.beta = 2 * la.inv(self.sigma_plus + self.sigma_minus) * mean_diff / la.norm(mean_diff)
+
+    def predict(self, X):
+        H = self.f(X, self.W, self.b)
+        x = H.dot(self.beta)
+        r_plus = gaussian(x, np.dot(self.beta.T, self.m_plus),
+                          np.dot(np.dot(self.beta.T, self.sigma_plus), self.beta))
+        r_minus = gaussian(x, np.dot(self.beta.T, self.m_minus),
+                           np.dot(np.dot(self.beta.T, self.sigma_minus), self.beta))
+        result = np.argmax(np.hstack([r_minus, r_plus]), axis=1).A1
+        result[result == 0] = -1
+        return result
