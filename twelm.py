@@ -25,7 +25,24 @@ def kulczynski2(X, W, b=None):
     XW = X.dot(W.T)
     XX = np.abs(X).sum(axis=1).reshape((-1, 1))
     WW = np.abs(W).sum(axis=1).reshape((1, -1))
-    return 0.5 * XW * (1.0 / XX + 1.0 / WW)
+    return 0.5 * (XW / XX + XW / WW)
+
+
+def f1_score(X, W, b=None):
+    XW = X.dot(W.T)
+    XX = np.abs(X).sum(axis=1).reshape((-1, 1))
+    WW = np.abs(W).sum(axis=1).reshape((1, -1))
+    return np.reciprocal(XW / XX) + np.reciprocal(XW / WW)
+
+
+def kulczynski3(X, W, b=None):
+    """
+    GMean of precision and recall
+    """
+    XW = X.dot(W.T)
+    XX = np.abs(X).sum(axis=1).reshape((-1, 1))
+    WW = np.abs(W).sum(axis=1).reshape((1, -1))
+    return np.sqrt(np.multiply((XW / XX), (XW / WW)))
 
 
 def euclidean(X, W, b=None):
@@ -44,8 +61,10 @@ def gaussian(x, mu, sigma):
 
 metric = {
     'tanimoto': tanimoto,
-    'kulczynski2': tanimoto,
-    'euclidean': euclidean
+    'kulczynski2': kulczynski2,
+    'euclidean': euclidean,
+    'kulczynski3': kulczynski3,
+    'f1_score': f1_score,
 
 }
 
@@ -58,7 +77,7 @@ class ELM(object):
         h - number of hidden units
         C - regularization strength (L2 norm)
         f - activation function [default: tanimoto]
-        balanced - if set to true, model with maximize GMean (or Balanced accuracy), 
+        balanced - if set to true, model with maximize GMean (or Balanced accuracy),
                    if set to false [default] - model will maximize Accuracy
         """
         self.h = h
@@ -127,7 +146,7 @@ class XELM(ELM):
 
         np.random.seed(self.rs)
         if hidden_layer is not None:
-            #print('using hidden layer')
+            # print('using hidden layer')
             W = hidden_layer[:h]
         else:
             W = X[np.random.choice(range(X.shape[0]), size=h, replace=False)]
@@ -216,8 +235,8 @@ class EEM(XELM):
         self.sigma_minus = LedoitWolf().fit(H_minus).covariance_
 
         if self.C is not None:
-            self.sigma_plus += (np.eye(len(self.sigma_plus)) / 2*self.C)
-            self.sigma_minus += (np.eye(len(self.sigma_minus)) / 2*self.C)
+            self.sigma_plus += (np.eye(len(self.sigma_plus)) / 2 * self.C)
+            self.sigma_minus += (np.eye(len(self.sigma_minus)) / 2 * self.C)
 
         mean_diff = self.m_plus - self.m_minus
         self.beta = 2 * la.inv(self.sigma_plus + self.sigma_minus) * mean_diff / la.norm(mean_diff)
