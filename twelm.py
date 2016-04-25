@@ -82,8 +82,14 @@ class ELM(object):
         """
         self.h = h
         self.C = C
-        self.f = metric[f]
-        self.metric_name = f
+        if f in metric:
+            self.f = metric[f]
+            self.metric_name = f
+        else:
+            self.f = f
+            self.metric_name = 'custom'
+
+
         self.rs = random_state
         self.balanced = balanced
 
@@ -147,9 +153,9 @@ class XELM(ELM):
         np.random.seed(self.rs)
         if hidden_layer is not None:
             # print('using hidden layer')
-            W = hidden_layer[:h]
+            W = csr_matrix(hidden_layer[:h])
         else:
-            W = X[np.random.choice(range(X.shape[0]), size=h, replace=False)]
+            W = csr_matrix(X[np.random.choice(range(X.shape[0]), size=h, replace=False)])
         b = np.random.normal(size=h)
         return W, b
 

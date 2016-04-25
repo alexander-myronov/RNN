@@ -1,6 +1,7 @@
 # coding: utf-8
 
 # In[ ]:
+import os
 
 import numpy as np
 import itertools
@@ -197,16 +198,16 @@ estimator_grids = [
 ]
 
 estimator_grids_simple = [
-    {'C': [None], 'h': [500]},
-    {'C': [None], 'h': [500]},
-    {'C': [None], 'h': [500]},
-    {'C': [None], 'h': [500]},
-    {'C': [1000], 'h': [1500], 'b': [0.4, 2]},
-    {'C': [1000], 'h': [1500]},
-    {'C': [1000], 'h': [1500]},
-    {'C': [1000], 'h': [1500]},
-    {'C': [1000], 'h': [1500]},
-    {'n_estimators': [75, 125]}
+    {'C': [None], 'h': [50]},
+    {'C': [None], 'h': [50]},
+    {'C': [None], 'h': [50]},
+    {'C': [None], 'h': [50]},
+    {'C': [1000], 'h': [50], 'b': [0.4]},
+    {'C': [1000], 'h': [50]},
+    {'C': [1000], 'h': [50]},
+    {'C': [1000], 'h': [50]},
+    {'C': [1000], 'h': [50]},
+    {'n_estimators': [7, 12]}
 ]
 
 
@@ -231,23 +232,52 @@ if __name__ == '__main__':
 
     mp.freeze_support()
 
-    pool = mp.Pool(processes=8)
+    filename = r'data/results2.csv'
 
-    result_series = pool.map(prepare_and_train, datafiles)
+    if os.path.isfile(filename):
+        scores_grid = pd.read_csv(filename)
+    else:
+        scores_grid = pd.DataFrame()
+        scores_grid.loc[:, 'dataset'] = pd.Series(data=datafiles)
+
+
+    scores_grid.set_index('dataset', inplace=True, drop=False)
+    scores_grid = scores_grid.reindex(pd.Series(data=datafiles))
+
+    for estimator in estimators:
+        column_name = get_estimator_descritpion(estimator)
+        if column_name not in scores_grid.columns:
+            scores_grid.loc[:, get_estimator_descritpion(estimator)] = pd.Series(
+                np.empty(len(datafiles), dtype=object))
+
+    pool = mp.Pool(processes=mp.cpu_count() - 1)
+
+
+    def map_callback(result):
+        datafile, estimators_scores = result
+        for estimator, score in itertools.izip(estimators, estimators_scores):
+            scores_grid.set_value(datafile, get_estimator_descritpion(estimator), score)
+        scores_grid.to_csv(filename, index=False)
+        print('callback: ', result)
+
+
+    async_results = [pool.apply_async(prepare_and_train, args=(datafile,), callback=map_callback)
+                     for datafile in datafiles if any(map(pd.isnull, scores_grid.loc[datafile]))]
+
+    while not all(map(lambda r: r.ready(), async_results)):
+        pass
+
+
+
+    result_series = map(lambda ar: ar.get(), async_results)
 
     pool.close()
 
-
+    exit()
 
     # In[ ]:
 
-    scores_grid = pd.DataFrame()
-    scores_grid.loc[:, 'dataset'] = pd.Series()
-    for estimator in estimators:
-        scores_grid.loc[:, get_estimator_descritpion(estimator) + '_score'] = pd.Series(
-            np.zeros(len(datafiles)))
-        scores_grid.loc[:, get_estimator_descritpion(estimator) + '_std'] = pd.Series(
-            np.zeros(len(datafiles)))
+
 
     # scores_values = pd.DataFrame()
     # scores_values.loc[:, 'dataset'] = pd.Series()
