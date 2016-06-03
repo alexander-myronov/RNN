@@ -72,7 +72,7 @@ metric = {
 class ELM(object):
     """ Extreme Learning Machine """
 
-    def __init__(self, h, C=10000, f='tanimoto', random_state=666, balanced=False):
+    def __init__(self, f, h=1, C=10000, random_state=666, balanced=False):
         """
         h - number of hidden units
         C - regularization strength (L2 norm)
@@ -88,7 +88,6 @@ class ELM(object):
         else:
             self.f = f
             self.metric_name = 'custom'
-
 
         self.rs = random_state
         self.balanced = balanced
@@ -168,13 +167,13 @@ class TWELM(XELM):
     WM Czarnecki, IEEE Computational Intelligence Magazine, 2015
     """
 
-    def __init__(self, h, C=10000, random_state=None):
+    def __init__(self, h=1, C=10000, random_state=None):
         super(self.__class__, self).__init__(h=h, C=C, f='tanimoto', random_state=random_state,
                                              balanced=True)
 
 
 class ELMRegressor(XELM):
-    def __init__(self, h, f, C=10000, random_state=666):
+    def __init__(self, f, h=1, C=10000, random_state=666):
         super(self.__class__, self).__init__(h=h, C=C, f=f, random_state=random_state,
                                              balanced=False)
 
@@ -190,9 +189,9 @@ class ELMRegressor(XELM):
 
 
 class RBFNet(XELM):
-    def __init__(self, h, f='euclidean', C=10000, b=1, random_state=None):
-        super(self.__class__, self).__init__(h, C, f='euclidean', random_state=random_state,
-                                             balanced=False)
+    def __init__(self, h=1, C=10000, b=1, random_state=None):
+        super(RBFNet, self).__init__(f='euclidean', h=h, C=C, random_state=random_state,
+                                     balanced=False)
         self.b = b  # np.random.uniform(0.4, 2.4, size=h)
 
     def rbf(self, dist):
@@ -209,7 +208,7 @@ class RBFNet(XELM):
     def predict(self, X):
         H = self.f(X, self.W, self.b)
         H = self.rbf(H)
-        return np.array(np.sign(H.dot(self.beta)).tolist())
+        return np.sign(H.dot(self.beta))
 
     def get_params(self, deep=True):
         return {'h': self.h, 'C': self.C, 'b': self.b}
@@ -222,9 +221,9 @@ class RBFNet(XELM):
 
 
 class EEM(XELM):
-    def __init__(self, h, f, C=10000, random_state=666):
-        super(self.__class__, self).__init__(h=h, C=C, f=f, random_state=random_state,
-                                             balanced=False)
+    def __init__(self, f, h=1, C=10000, random_state=666):
+        super(EEM, self).__init__(h=h, C=C, f=f, random_state=random_state,
+                                  balanced=False)
 
     def fit(self, X, y, hidden_layer=None):
         self.W, self.b = self._hidden_init(X, y, hidden_layer)
@@ -246,6 +245,7 @@ class EEM(XELM):
 
         mean_diff = self.m_plus - self.m_minus
         self.beta = 2 * la.inv(self.sigma_plus + self.sigma_minus) * mean_diff / la.norm(mean_diff)
+        pass
 
     def predict(self, X):
         H = self.f(X, self.W, self.b)
@@ -254,6 +254,7 @@ class EEM(XELM):
                           np.dot(np.dot(self.beta.T, self.sigma_plus), self.beta))
         r_minus = gaussian(x, np.dot(self.beta.T, self.m_minus),
                            np.dot(np.dot(self.beta.T, self.sigma_minus), self.beta))
-        result = np.argmax(np.hstack([r_minus, r_plus]), axis=1).A1
+        result = np.argmax(np.hstack([r_minus, r_plus]), axis=1)
+        result = np.array(result).ravel()
         result[result == 0] = -1
         return result

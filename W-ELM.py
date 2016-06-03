@@ -1,17 +1,23 @@
-# coding: utf-8
-
+# -*- coding: utf-8 -*-
 # In[ ]:
+import cProfile
+from io import StringIO
 import os
+import pstats
 
 import numpy as np
 import itertools
 import pandas as pd
+from six import BytesIO
 from sklearn.datasets import load_svmlight_file
 from sklearn.cross_validation import cross_val_score, StratifiedKFold
 from sklearn.grid_search import GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.base import clone
-from twelm import TWELM, XELM, RBFNet, EEM
+import time
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from twelm import TWELM, XELM, RBFNet, EEM, ELM
 
 from sklearn.metrics import confusion_matrix
 
@@ -23,6 +29,9 @@ from sklearn.metrics import confusion_matrix
 # In[ ]:
 
 import sys
+# from twelm_theano import XELMTheano
+# from twelm_theano import XELMTheano
+from twelm_theano import XELMTheano, EEMTheano, RBFNetTheano
 
 oldsysstdout = sys.stdout
 
@@ -60,6 +69,17 @@ datafiles = [
     r'data/hERG_ExtFP.libsvm',
     r'data/hiv_integrase_ExtFP.libsvm',
     r'data/hiv_protease_ExtFP.libsvm',
+]
+
+datafiles_toy = [
+    r'data/diabetes_scale.libsvm',
+    r'data/australian_scale.libsvm',
+    r'data/breast-cancer_scale.libsvm',
+    r'data/german.numer_scale.libsvm',
+    r'data/ionosphere_scale.libsvm',
+    r'data/liver-disorders_scale.libsvm',
+    r'data/heart_scale.libsvm',
+    r'data/sonar_scale.libsvm',
 ]
 
 
@@ -126,7 +146,11 @@ def perform_grid_search(estimator, features, activity, scorer, param_grid, n_out
 
             search.fit(features[train_index], activity[train_index])
 
-            test_score = scorer(search.best_estimator_, features[test_index], activity[test_index])
+            estimator_train = clone(estimator)
+            estimator_train.set_params(**search.best_params_)
+            estimator_train.fit(features[train_index], activity[train_index])
+
+            test_score = scorer(estimator_train, features[test_index], activity[test_index])
             test_scores[rep * n_outer_folds + i] = test_score
             train_scores[rep * n_outer_folds + i] = search.best_score_
 
@@ -151,7 +175,7 @@ def test_models(estimators, estimator_grids, X, Y, scorer, n_outer_folds, n_inne
                 n_outer_repetitions):
     estimator_scores = []
     # estimator_scores_std = np.zeros(len(estimators))
-    assert len(estimators) == len(estimator_grids)
+    assert len(estimators) <= len(estimator_grids)
     for i, (estimator, grid) in enumerate(itertools.izip(estimators, estimator_grids)):
         print(get_estimator_descritpion(estimator))
 
@@ -172,29 +196,33 @@ def test_models(estimators, estimator_grids, X, Y, scorer, n_outer_folds, n_inne
 # In[ ]:
 
 estimators = [
-    EEM(h=100, f='tanimoto'),
-    EEM(h=100, f='kulczynski2'),
-    EEM(h=100, f='kulczynski3'),
-    EEM(h=100, f='f1_score'),
+    EEMTheano(h=100, f='tanimoto'),
+    EEMTheano(h=100, f='kulczynski2'),
+    EEMTheano(h=100, f='kulczynski3'),
+    EEMTheano(h=100, f='f1_score'),
     RBFNet(h=100),
-    XELM(h=10, f='tanimoto', balanced=True),
-    XELM(h=10, f='kulczynski2', balanced=True),
-    XELM(h=10, f='kulczynski3', balanced=True),
-    XELM(h=10, f='f1_score', balanced=True),
-    RandomForestClassifier(n_jobs=-1)
+    XELMTheano(h=10, f='tanimoto', balanced=True),
+    XELMTheano(h=10, f='kulczynski2', balanced=True),
+    XELMTheano(h=10, f='kulczynski3', balanced=True),
+    XELMTheano(h=10, f='f1_score', balanced=True),
+    # RandomForestClassifier(n_jobs=-1)
 ]
 
 estimator_grids = [
-    {'C': [None], 'h': [500, 1500]},
-    {'C': [None], 'h': [500, 1500]},
-    {'C': [None], 'h': [500, 1500]},
-    {'C': [None], 'h': [500, 1500]},
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
     {'C': [1000, 100000], 'h': [500, 1500], 'b': [0.4, 1, 2]},
-    {'C': [1000, 100000], 'h': [500, 1500]},
-    {'C': [1000, 100000], 'h': [500, 1500]},
-    {'C': [1000, 100000], 'h': [500, 1500]},
-    {'C': [1000, 100000], 'h': [500, 1500]},
-    {'n_estimators': [25, 75, 125]}
+    # {'C': [1000, 100000], 'h': [500, 1500]},
+    # {'C': [1000, 100000], 'h': [500, 1500]},
+    # {'C': [1000, 100000], 'h': [500, 1500]},
+    # {'C': [1000, 100000], 'h': [500, 1500]},
+    # {'n_estimators': [25, 75, 125]}
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
 ]
 
 estimator_grids_simple = [
@@ -208,38 +236,79 @@ estimator_grids_simple = [
     {'C': [1000], 'h': [50]},
     {'C': [1000], 'h': [50]},
     {'n_estimators': [7, 12]}
+
+]
+
+estimators_toy = [
+    XELMTheano(f='euclidean', balanced=True),
+    EEMTheano(f='euclidean'),
+    RBFNetTheano(),
+    RandomForestClassifier(),
+    SVC(),
+    LogisticRegression(solver='liblinear'),
+]
+
+estimator_grids_toy = [
+    {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000], 'b': [0.1, 0.5, 1]},
+    {
+        'n_estimators': [20, 40, 60, 100],
+        'max_depth': [4, 5, 6, 7],
+        'max_features': ['sqrt', 'log2', None]
+    },
+    {'kernel': ['linear', 'rbf', 'poly'], 'C': [1, 10, 100, 1000, 10000]},
+    {'penalty': ['l1', 'l2'], 'C': [1, 10, 100, 1000, 10000]},
+
 ]
 
 
 def prepare_and_train(datafile):
     print(datafile)
     features, activity = load_svmlight_file(datafile)
-    estimators_scores = test_models(estimators,
-                                    estimator_grids,
-                                    features,
-                                    activity,
-                                    scorer=bac_scorer,
-                                    n_outer_folds=3,
-                                    n_inner_folds=3,
-                                    n_outer_repetitions=3)
+    s = BytesIO()
+    try:
+        # pr = cProfile.Profile()
+        # pr.enable()
+        estimators_scores = test_models(estimators_toy,
+                                        estimator_grids_toy,
+                                        features,
+                                        activity,
+                                        scorer=bac_scorer,
+                                        n_outer_folds=3,
+                                        n_inner_folds=3,
+                                        n_outer_repetitions=5)
+        # pr.disable()
+
+        # ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+        # ps.print_stats()
+    except Exception as e:
+        print(e)
+        return datafile, e, None
     print('%s ready' % datafile)
-    return datafile, estimators_scores
+    return datafile, estimators_scores, s.getvalue()
 
 
 if __name__ == '__main__':
+
+    # import theano
+    # theano.config.exception_verbosity ='high'
 
     import multiprocessing as mp
 
     mp.freeze_support()
 
-    filename = r'data/results2.csv'
+    datafiles = datafiles_toy
+    estimators = estimators_toy
+    estimator_grids = estimator_grids_toy
+
+    filename = r'data/results_toy.csv'
 
     if os.path.isfile(filename):
         scores_grid = pd.read_csv(filename)
     else:
-        scores_grid = pd.DataFrame()
+        scores_grid = pd.DataFrame(dtype=object)
         scores_grid.loc[:, 'dataset'] = pd.Series(data=datafiles)
-
 
     scores_grid.set_index('dataset', inplace=True, drop=False)
     scores_grid = scores_grid.reindex(pd.Series(data=datafiles))
@@ -247,31 +316,40 @@ if __name__ == '__main__':
     for estimator in estimators:
         column_name = get_estimator_descritpion(estimator)
         if column_name not in scores_grid.columns:
-            scores_grid.loc[:, get_estimator_descritpion(estimator)] = pd.Series(
-                np.empty(len(datafiles), dtype=object))
+            scores_grid.loc[:, column_name] = pd.Series(
+                [''] * len(datafiles)).astype('str')
+            scores_grid.loc[:, column_name] = scores_grid.loc[:, column_name].astype('str')
 
-    pool = mp.Pool(processes=mp.cpu_count() - 1)
+    pool = mp.Pool(1)
 
 
     def map_callback(result):
-        datafile, estimators_scores = result
+        print('done %s dataset' % result[0])
+        print(result[2])
+        datafile, estimators_scores, _ = result
+        if estimators_scores is Exception:
+            print('callback: datafile=%s, exception=%s' % (datafile, estimators_scores))
         for estimator, score in itertools.izip(estimators, estimators_scores):
-            scores_grid.set_value(datafile, get_estimator_descritpion(estimator), score)
+            scores_grid.set_value(datafile, get_estimator_descritpion(estimator), str(score))
         scores_grid.to_csv(filename, index=False)
-        print('callback: ', result)
 
+
+    start_time = time.time()
 
     async_results = [pool.apply_async(prepare_and_train, args=(datafile,), callback=map_callback)
-                     for datafile in datafiles if any(map(pd.isnull, scores_grid.loc[datafile]))]
+                     for datafile in datafiles[:] if
+                     any(map(lambda v: pd.isnull(v) or v == 'nan', scores_grid.loc[datafile]))]
 
     while not all(map(lambda r: r.ready(), async_results)):
         pass
 
-
-
     result_series = map(lambda ar: ar.get(), async_results)
 
     pool.close()
+
+    end_time = time.time()
+
+    print 'training done in %2.2f sec' % (end_time - start_time)
 
     exit()
 
