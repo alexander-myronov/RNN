@@ -10,7 +10,7 @@ from theano import ifelse
 from theano.sandbox.linalg import matrix_inverse
 from twelm import XELM, EEM, RBFNet
 from matplotlib import pyplot as plt
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, issparse
 import numpy as np
 from theano.sandbox.linalg.ops import pinv, inv_as_solve
 import theano.tensor as T
@@ -143,7 +143,12 @@ class XELMTheano(XELM):
         #     self.learning_function = theano_init(self.metric_name)
 
         self.W, self.b = self._hidden_init(X, y, hidden_layer)
-        self.W = self.W.toarray()
+        if issparse(self.W):
+            self.W = self.W.toarray()
+
+        if issparse(X):
+            X = X.toarray()
+
         if self.balanced:
             counts = {l: float(y.tolist().count(l)) for l in set(y)}
             ms = max([counts[k] for k in counts])
@@ -154,11 +159,13 @@ class XELMTheano(XELM):
 
         # print(w.shape, y.shape, self.C)
 
-        self.beta = self.learning_function(X.toarray(), self.W, w.T, self.C, y).reshape(
+        self.beta = self.learning_function(X, self.W, w.T, self.C, y).reshape(
             -1, 1)
 
     def predict(self, X):
-        return self.predict_function(X.toarray(), self.W, self.beta)
+        if issparse(X):
+            X = X.toarray()
+        return self.predict_function(X, self.W, self.beta)
 
 
 @memoized
@@ -242,10 +249,12 @@ class EEMTheano(EEM):
 
     def fit(self, X, y, hidden_layer=None):
         self.W, _ = self._hidden_init(X, y, hidden_layer)
-        self.W = self.W.toarray()
+        if issparse(self.W):
+            self.W = self.W.toarray()
+        if issparse(X):
+            X = X.toarray()
         self.beta, self.sigma_plus, self.sigma_minus, \
-        self.m_plus, self.m_minus = self.learning_function(X.toarray(),
-                                                           self.W, y, self.C)
+        self.m_plus, self.m_minus = self.learning_function(X, self.W, y, self.C)
 
         self.beta = self.beta.reshape(-1, 1)
         self.m_plus = self.m_plus.reshape(-1, 1)
@@ -253,7 +262,8 @@ class EEMTheano(EEM):
         pass
 
     def predict(self, X):
-        X = X.toarray()
+        if issparse(X):
+            X = X.toarray()
 
         result = self.predict_function(X, self.W, self.beta, self.m_plus, self.m_minus,
                                        self.sigma_plus, self.sigma_minus)
@@ -306,12 +316,18 @@ class RBFNetTheano(RBFNet):
 
     def fit(self, X, y, hidden_layer=None):
         self.W, _ = self._hidden_init(X, y, hidden_layer)
-        self.W = self.W.toarray()
+        if issparse(self.W):
+            self.W = self.W.toarray()
 
-        self.beta = self.learning_function(X.toarray(), self.W, self.C, self.b, y)
+        if issparse(X):
+            X = X.toarray()
+
+        self.beta = self.learning_function(X, self.W, self.C, self.b, y)
 
     def predict(self, X):
-        result = self.predict_function(X.toarray(), self.W, self.beta, self.b)
+        if issparse(X):
+            X = X.toarray()
+        result = self.predict_function(X, self.W, self.beta, self.b)
         return result
 
 
@@ -354,8 +370,8 @@ if __name__ == '__main__':
 
     print(compare_2_models(
 
-        RBFNet(h=h, C=1000,b=1,random_state=0),
-        RBFNetTheano(h=h, C=1000,b=1, random_state=0),
+        RBFNet(h=h, C=1000, b=1, random_state=0),
+        RBFNetTheano(h=h, C=1000, b=1, random_state=0),
         features,
         activity,
         h))

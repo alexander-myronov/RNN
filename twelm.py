@@ -152,9 +152,9 @@ class XELM(ELM):
         np.random.seed(self.rs)
         if hidden_layer is not None:
             # print('using hidden layer')
-            W = csr_matrix(hidden_layer[:h])
+            W = hidden_layer[:h]
         else:
-            W = csr_matrix(X[np.random.choice(range(X.shape[0]), size=h, replace=False)])
+            W = X[np.random.choice(range(X.shape[0]), size=h, replace=False)]
         b = np.random.normal(size=h)
         return W, b
 
