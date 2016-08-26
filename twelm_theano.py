@@ -9,12 +9,13 @@ from sklearn.metrics import f1_score
 from theano import ifelse
 from theano.sandbox.linalg import matrix_inverse
 from twelm import XELM, EEM, RBFNet
-from matplotlib import pyplot as plt
+
 from scipy.sparse import csr_matrix, issparse
 import numpy as np
 from theano.sandbox.linalg.ops import pinv, inv_as_solve
 import theano.tensor as T
-import theano.sparse
+# import theano.sparse
+import theano
 
 __author__ = 'amyronov'
 
@@ -200,8 +201,8 @@ def get_eem_learning_function(metric_name):
         the_H_plus = the_H[y == 1]
         the_H_minus = the_H[y == -1]
 
-        the_sigma_plus = LedoitWolf().fit(the_H_plus).covariance_
-        the_sigma_minus = LedoitWolf().fit(the_H_minus).covariance_
+        the_sigma_plus = LedoitWolf(store_precision=False).fit(the_H_plus).covariance_
+        the_sigma_minus = LedoitWolf(store_precision=False).fit(the_H_minus).covariance_
 
         if C is None:
             C = 0
@@ -225,7 +226,7 @@ def get_eem_predict_function(metric_name):
     H = metric_theano[metric_name](X, W)
 
     def gaussian(x, mu, sigma):
-        return T.exp(T.power((x - mu), 2) / (-2 * sigma)[0]) / (sigma * T.sqrt(2 * np.pi))[0]
+        return T.exp(T.power((x - mu[0]), 2) / (-2 * sigma)[0]) / (sigma * T.sqrt(2 * np.pi))[0]
 
     x = T.dot(H, beta)
     r_plus = gaussian(x, T.dot(beta.T, m_plus),
@@ -333,9 +334,11 @@ class RBFNetTheano(RBFNet):
 
 if __name__ == '__main__':
     datafile = r'data/hiv_integrase_ExtFP.libsvm'
-    datafile = r'data/d2_ExtFP.libsvm'
+    # datafile = r'data/d2_ExtFP.libsvm'
     # datafile = r'data/diabetes_scale.libsvm'
     features, activity = load_svmlight_file(datafile)
+
+    print('data loaded')
 
 
     def compare_2_models(model1, model2, X, y, h):
@@ -343,7 +346,7 @@ if __name__ == '__main__':
         hidden_layer = features[np.random.choice(X.shape[0],
                                                  h,
                                                  replace=False)]
-
+        print('training 1st model')
         pr = cProfile.Profile()
         pr.enable()
         model1.fit(X, y, hidden_layer=hidden_layer)
@@ -352,6 +355,7 @@ if __name__ == '__main__':
         ps = pstats.Stats(pr).sort_stats('cumulative')
         ps.print_stats()
 
+        print('training 2nd model')
         pr = cProfile.Profile()
         pr.enable()
         model2.fit(X, y, hidden_layer=hidden_layer)
@@ -370,8 +374,8 @@ if __name__ == '__main__':
 
     print(compare_2_models(
 
-        RBFNet(h=h, C=1000, b=1, random_state=0),
-        RBFNetTheano(h=h, C=1000, b=1, random_state=0),
+        EEM(h=h, f='tanimoto', C=1000, random_state=0),
+        EEMTheano(h=h, f='tanimoto', C=1000, random_state=0),
         features,
         activity,
         h))

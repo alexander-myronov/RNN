@@ -9,6 +9,8 @@ import os
 import pstats
 import traceback
 import datetime
+from ipyparallel import CompositeError
+import ipyparallel
 
 import numpy as np
 import itertools
@@ -25,6 +27,8 @@ import time
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from kfold_repeat import KFoldRepeat
+from loader import get_datasets_with_dud, loader
+from parallel_grid_search import GridSearchCVParallel
 from twelm import TWELM, XELM, RBFNet, EEM, ELM
 
 from sklearn.metrics import confusion_matrix
@@ -39,11 +43,12 @@ from sklearn.metrics import confusion_matrix
 import sys
 # from twelm_theano import XELMTheano
 # from twelm_theano import XELMTheano
-from twelm_theano import XELMTheano, EEMTheano, RBFNetTheano
+#
 
 
 
 # In[ ]:
+from twelm_theano import XELMTheano, RBFNetTheano, EEMTheano
 
 datafiles = [
     r'data/5ht2a_ExtFP.libsvm',
@@ -59,7 +64,6 @@ datafiles = [
     r'data/hiv_integrase_ExtFP.libsvm',
     r'data/hiv_protease_ExtFP.libsvm',
 ]
-
 
 datafiles_toy = [
     r'data/diabetes_scale.libsvm',
@@ -88,6 +92,7 @@ def process_cm(confusion_mat, i=0):
 # In[ ]:
 
 def bac_error(Y, Y_predict):
+    import numpy as np
     cm = confusion_matrix(Y, Y_predict)
     bac_values = np.zeros(cm.shape[0])
     for i in xrange(cm.shape[0]):
@@ -108,7 +113,8 @@ def bac_scorer(estimator, X, Y):
 # In[ ]:
 
 def perform_grid_search(estimator, features, activity, scorer, param_grid, n_outer_folds,
-                        n_inner_folds, n_outer_repetitions, n_inner_repetitions):
+                        n_inner_folds, n_outer_repetitions, n_inner_repetitions,
+                        X_name='X', y_name='y'):
     """
     returns
     test score for each outer fold
@@ -123,7 +129,7 @@ def perform_grid_search(estimator, features, activity, scorer, param_grid, n_out
         features = features.toarray()
 
     for rep in range(n_outer_repetitions):
-        # print('%d/%d' % (rep, n_outer_repetitions))
+        print('%d/%d repetition' % (rep + 1, n_outer_repetitions))
         fold = StratifiedKFold(activity, n_folds=n_outer_folds, shuffle=True)
         # print(len(fold))
         fit_params = {}
@@ -133,15 +139,39 @@ def perform_grid_search(estimator, features, activity, scorer, param_grid, n_out
                                                                    max_h,
                                                                    replace=False)]
         for i, (train_index, test_index) in enumerate(fold):
+            print('%d/%d fold' % (i + 1, n_outer_folds))
+
+            def gs_callback(gs_progress, gs_length, elapsed):
+                print('[%s]: cv: %d/%d, grid search: %d/%d' % \
+                      (elapsed,
+                       rep * n_outer_folds + i + 1,
+                       n_outer_repetitions * n_outer_folds,
+                       gs_progress,
+                       gs_length))
+
+            view = None
+            if 'view' in globals():
+                view = globals()['view']
             search = GridSearchCV(estimator, param_grid, scoring=scorer,
-                                  cv=KFoldRepeat(activity[train_index], n_folds=n_inner_folds,
-                                                 n_reps=n_inner_repetitions),
-                                  n_jobs=1,
-                                  fit_params=fit_params)
+                                          cv=KFoldRepeat(activity[train_index],
+                                                         n_folds=n_inner_folds,
+                                                         n_reps=n_inner_repetitions),
+                                          fit_params=fit_params,
+                                          verbose=0,
+                                          #view=view,
+                                          #callback=gs_callback,
+                                          refit=False)
 
             search.fit(features[train_index], activity[train_index])
+                       #x_is_index=True,
+                       #X_name=X_name,
+                       #y_name=y_name)
 
-            test_score = scorer(search.best_estimator_, features[test_index], activity[test_index])
+            best_estimator = clone(estimator).set_params(**search.best_params_)
+            # best_estimator = search.best_estimator_
+            best_estimator.fit(features[train_index], activity[train_index])
+
+            test_score = scorer(best_estimator, features[test_index], activity[test_index])
             test_scores[rep * n_outer_folds + i] = test_score
             train_scores[rep * n_outer_folds + i] = search.best_score_
 
@@ -164,7 +194,7 @@ def get_estimator_descritpion(estimator):
 # In[ ]:
 
 def test_models(estimators, estimator_grids, X, Y, scorer, n_outer_folds, n_inner_folds,
-                n_outer_repetitions, n_inner_repetitions):
+                n_outer_repetitions, n_inner_repetitions, X_name='X', y_name='y'):
     estimator_scores = []
     # estimator_scores_std = np.zeros(len(estimators))
     assert len(estimators) <= len(estimator_grids)
@@ -179,7 +209,9 @@ def test_models(estimators, estimator_grids, X, Y, scorer, n_outer_folds, n_inne
                                                 n_outer_folds=n_outer_folds,
                                                 n_inner_folds=n_inner_folds,
                                                 n_outer_repetitions=n_outer_repetitions,
-                                                n_inner_repetitions=n_inner_repetitions)
+                                                n_inner_repetitions=n_inner_repetitions,
+                                                X_name=X_name,
+                                                y_name=y_name)
         print(scores_test)
         estimator_scores.append(scores_test)
 
@@ -187,6 +219,8 @@ def test_models(estimators, estimator_grids, X, Y, scorer, n_outer_folds, n_inne
 
 
 # In[ ]:
+
+# from twelm_theano import XELMTheano, EEMTheano, RBFNetTheano
 
 estimators = [
     EEMTheano(h=100, f='tanimoto'),
@@ -199,30 +233,40 @@ estimators = [
     XELMTheano(h=10, f='kulczynski3', balanced=True),
     XELMTheano(h=10, f='f1_score', balanced=True),
     RandomForestClassifier(n_jobs=-1),
-    # SVC(cache_size=1000)
+    SVC(),
+    LogisticRegression(n_jobs=-1),
 ]
 
-estimator_grids = [
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
++estimator_grids = [
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
     {'C': [100, 1000, 100000], 'h': [200, 400, 800, 1000], 'b': [0.01, 0.1, 1]},
     # {'C': [1000, 100000], 'h': [500, 1500]},
     # {'C': [1000, 100000], 'h': [500, 1500]},
     # {'C': [1000, 100000], 'h': [500, 1500]},
     # {'C': [1000, 100000], 'h': [500, 1500]},
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'n_estimators': [25, 75, 125]},
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
+    {'C': [100, 1000, 10000], 'h': [200, 400, 800, 1000]},
     {
-        'C': [0.1, 1, 10, 100, 1000],
+        'n_estimators': [25, 75, 125],
+        'max_depth': [3, 5, 7, None],
+        'min_samples_leaf': [1, 5, 10],
+
+    },
+    {
+        'C': [1, 100, 1000],
         'kernel': ['linear', 'poly', 'rbf'],
-        'gamma': [0.01, 0.0001, 1e-5, 1e-7, 'auto'],
+        'gamma': [ 1, 0.01, 1e-7, 'auto'],
         'degree': [2, 3, 4]
     },
+    {
+        'C': [0.1, 1, 10, 100, 1000],
+    },
+
 ]
 
 estimator_grids_simple = [
@@ -240,18 +284,18 @@ estimator_grids_simple = [
 ]
 
 estimators_toy = [
-    XELMTheano(f='euclidean', balanced=True),
-    EEMTheano(f='euclidean'),
-    RBFNetTheano(),
+    # XELMTheano(f='euclidean', balanced=True),
+    # EEMTheano(f='euclidean'),
+    # RBFNetTheano(),
     RandomForestClassifier(),
     SVC(),
     LogisticRegression(solver='liblinear'),
 ]
 
 estimator_grids_toy = [
-    {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
-    {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000], 'b': [0.1, 0.5, 1]},
+    # {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    # {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000]},
+    # {'C': [1, 10, 100, 1000, 10000], 'h': [100, 200, 300, 400, 800, 1000], 'b': [0.1, 0.5, 1]},
     {
         'n_estimators': [20, 40, 60, 100],
         'max_depth': [4, 5, 6, 7],
@@ -271,6 +315,8 @@ def prepare_and_train(name, X, y, estimator_index, n_inner_folds=3, n_inner_repe
         # pr = cProfile.Profile()
         # pr.enable()
 
+        X_filename = r'data/cache/' + name + '_X'
+        y_filename = r'data/cache/' + name + '_y'
         estimators_scores = test_models([estimators[estimator_index]],
                                         [estimator_grids[estimator_index]],
                                         X,
@@ -279,7 +325,9 @@ def prepare_and_train(name, X, y, estimator_index, n_inner_folds=3, n_inner_repe
                                         n_outer_folds=n_outer_folds,
                                         n_outer_repetitions=n_outer_repetitions,
                                         n_inner_folds=n_inner_folds,
-                                        n_inner_repetitions=n_inner_repetitions)
+                                        n_inner_repetitions=n_inner_repetitions,
+                                        X_name=X_filename,
+                                        y_name=y_filename)
         # pr.disable()
 
         # ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
@@ -293,65 +341,18 @@ def prepare_and_train(name, X, y, estimator_index, n_inner_folds=3, n_inner_repe
     return name, estimator_index, estimators_scores
 
 
-def get_datasets(datafiles):
-    result = {}
-    for filename in datafiles:
-        result[os.path.basename(filename).replace('.libsvm', '')] = load_svmlight_file(filename)
-    return result
+def setup_ipp(remote):
+    import ipyparallel as ipp
+    if remote:
+        client = ipp.Client(profile_dir='/shared/ipython/profile_ssh')
+        # ipp.use_dill()
+        client[:].map(os.chdir, ['/shared/RNN'] * len(client[:]), block=True)
+        print(client[:].apply_sync(os.getcwd))
+    else:
+        client = ipp.Client()
 
-
-def get_dud_filename(filename):
-    filename_wo_extension = filename.replace('.libsvm', '')
-    parts = filename_wo_extension.split('_')
-    return 'data/' + parts[0] + '_DUD_' + parts[1] + '.csv'
-
-
-def load_dud(filename):
-    df = pd.read_csv(filename)
-    columns = list(df.columns)
-    columns.remove('Name')
-    values = df.loc[:, columns].values
-
-    return values, np.full(len(values), fill_value=-1)
-
-
-def get_datasets_with_dud(datafiles):
-    result = OrderedDict()
-    for filename in datafiles:
-        X, y = load_svmlight_file(filename)
-        # if issparse(X): #TODO: sparse option
-        #     X = X.toarray()
-        filename = os.path.basename(filename).replace('.libsvm', '')
-        result[filename] = (X, y)
-
-        dud_filename = get_dud_filename(filename)
-        if not os.path.isfile(dud_filename):
-            continue
-        X_dud, y_dud = load_dud(dud_filename)
-        X_dud = csr_matrix(X_dud)
-
-        pad_length = X_dud.shape[1] - X.shape[1]
-
-        if issparse(X):
-            X = scipy.sparse.hstack([X, csr_matrix(np.zeros(shape=(X.shape[0], pad_length)))],
-                                    format='csr')
-        else:
-            X = np.hstack([X, np.zeros(shape=(X.shape[0], pad_length))])
-
-        for percent in [0.1, 0.5, 1]:
-            indices = np.random.choice(X_dud.shape[0], int(X_dud.shape[0] * percent), replace=False)
-            X_mixin = X_dud[indices]
-            y_mixin = y_dud[indices]
-
-            result['%s+%d%%DUD' % (filename, int(percent * 100))] = \
-                (scipy.sparse.vstack([X, X_mixin], format='csr'), np.concatenate([y, y_mixin]))
-            del X_mixin
-            X_mixin = None
-
-        del X_dud
-        X_dud = None
-
-    return result
+    view = client.load_balanced_view()
+    return view
 
 
 if __name__ == '__main__':
@@ -380,10 +381,10 @@ if __name__ == '__main__':
 
         datasets = OrderedDict()
         for name, (X_filename, y_filename) in filenames.iteritems():
-            def loader():
-                return np.load(X_filename+'.npy', mmap_mode='r'), \
-                             np.load(y_filename+'.npy', mmap_mode='r')
-            datasets[name] = loader
+            # if 'DUD' not in name:
+            #     continue
+
+            datasets[name] = loader(X_filename, y_filename)
 
     else:
         datasets = get_datasets_with_dud(datafiles)
@@ -412,13 +413,47 @@ if __name__ == '__main__':
     filename = r'data/results_debug.csv'
     filename = args.file
 
+    #view = setup_ipp(remote=True)
+    #globals()['view'] = view
+    # view.client[:].push(
+    #     {
+    #         'bac_scorer': bac_scorer,
+    #         'bac_error': bac_error,
+    #         'process_cm': process_cm,
+    #         'confusion_matrix':confusion_matrix,
+    #         #'np': np,
+    #
+    #     })
+
+
+    # def imports():
+    #
+    #
+    #
+    # def check_imports():
+    #     try:
+    #         print(bac_scorer)
+    #         # print(confusion_matrix)
+    #         return True
+    #     except:
+    #         return False
+
+
+    # view.client[:].apply_sync(imports)
+    #
+    # print(view.client[:].apply_sync(check_imports))
+
     if os.path.isfile(filename):
         scores_grid = pd.read_csv(filename)
+        scores_grid.loc[:, 'dataset'] = pd.Series(data=datasets.keys())
     else:
         scores_grid = pd.DataFrame(dtype=object)
         scores_grid.loc[:, 'dataset'] = pd.Series(data=datasets.keys())
 
     scores_grid.set_index('dataset', inplace=True, drop=False)
+    # print(datasets.keys())
+    # print(scores_grid.columns)
+    # print(scores_grid.index)
     scores_grid = scores_grid.reindex(pd.Series(data=datasets.keys()))
 
     for estimator in estimators:
@@ -441,6 +476,8 @@ if __name__ == '__main__':
             print(
                 'callback: datafile=%s, model=%s exception=%s \n traceback\n %s' % (
                     dataset_name, estimator_name, repr(estimators_scores[0]), tb))
+            if isinstance(estimators_scores[0], CompositeError):
+                estimators_scores[0].print_traceback()
         else:
             scores_grid.set_value(dataset_name, estimator_name, str(estimators_scores[0]))
             scores_grid.to_csv(filename, index=False)
@@ -450,28 +487,51 @@ if __name__ == '__main__':
 
     parallel_models = False
     if parallel_models:
-        # TODO: args not implemented
 
         import multiprocessing as mp
 
         mp.freeze_support()
         pool = mp.Pool(processes=4)
-        async_results = [pool.apply_async(prepare_and_train, args=(name, X, y, estimator_index),
-                                          callback=map_callback)
-                         for (name, (X, y)), estimator_index in
-                         itertools.product(datasets.iteritems(), xrange(len(estimators))) if
-                         scores_grid.loc[
-                             name, get_estimator_descritpion(estimators[estimator_index])] == 'nan']
 
+        async_results = []
+        for (name, (dataset)), estimator_index in itertools.product(datasets.items()[::1],
+                                                                    xrange(0, len(estimators))):
+            value = \
+                str(scores_grid.loc[name, get_estimator_descritpion(estimators[estimator_index])])
+
+            try:
+                value = np.fromstring(value.replace('[', '').replace(']', ''), sep=' ')
+                if np.isnan(value).any():
+                    raise Exception
+            except:
+                value = None
+
+            if callable(dataset):
+                X, y = dataset()
+            else:
+                X, y = dataset
+
+            if value is None or len(value) < args.cv_folds * args.cv_reps:
+                res = pool.apply_async(prepare_and_train,
+                                       args=(name,
+                                             X,
+                                             y,
+                                             estimator_index,
+                                             args.gs_folds,
+                                             args.gs_reps,
+                                             args.cv_folds,
+                                             args.cv_reps),
+                                       callback=map_callback)
+                async_results.append(res)
         while not all(map(lambda r: r.ready(), async_results)):
             pass
-        result_series = map(lambda ar: ar.get(), async_results)
+        # result_series = map(lambda ar: ar.get(), async_results)
         pool.close()
     else:
 
         #
 
-        for (name, (dataset)), estimator_index in itertools.product(datasets.iteritems(),
+        for (name, (dataset)), estimator_index in itertools.product(datasets.items()[::1],
                                                                     xrange(0, len(estimators))):
             value = \
                 str(scores_grid.loc[name, get_estimator_descritpion(estimators[estimator_index])])
@@ -490,10 +550,10 @@ if __name__ == '__main__':
 
             if value is None or len(value) < args.cv_folds * args.cv_reps:
                 map_callback(prepare_and_train(name, X, y, estimator_index,
-                                               n_inner_folds=args.cv_folds,
-                                               n_inner_repetitions=args.cv_reps,
-                                               n_outer_folds=args.gs_folds,
-                                               n_outer_repetitions=args.gs_reps
+                                               n_inner_folds=args.gs_folds,
+                                               n_inner_repetitions=args.gs_reps,
+                                               n_outer_folds=args.cv_folds,
+                                               n_outer_repetitions=args.cv_reps,
                                                ))
 
     end_time = time.time()
@@ -501,65 +561,3 @@ if __name__ == '__main__':
     print 'training done in %2.2f sec' % (end_time - start_time)
 
     exit()
-
-    # In[ ]:
-
-
-
-    # scores_values = pd.DataFrame()
-    # scores_values.loc[:, 'dataset'] = pd.Series()
-    # for estimator in estimators:
-    #     scores_values.loc[:, get_estimator_descritpion(estimator)] = pd.Series(index=np.arange(len(datafiles)))
-
-    scores_values = {}
-
-    for i, (datafile, estimators_scores) in enumerate(result_series):
-        print(datafile)
-
-        scores_grid.ix[i, 'dataset'] = datafile
-        # scores_values.ix[i, 'dataset'] = datafile
-
-
-
-        for estimator, score in itertools.izip(estimators, estimators_scores):
-            scores_grid.ix[i, get_estimator_descritpion(estimator) + '_score'] = score.mean()
-            scores_grid.ix[i, get_estimator_descritpion(estimator) + '_std'] = score.std()
-            # scores_values.ix[i, get_estimator_descritpion(estimator)] = score
-            scores_values[(datafile, get_estimator_descritpion(estimator))] = score
-
-
-    # In[ ]:
-
-    import cPickle
-
-    with open(r'data/scores.pkl', 'wb') as f:
-        cPickle.dump(scores_values, f, -1)
-
-
-    # In[ ]:
-
-    scores_grid_ds = scores_grid.set_index('dataset')
-
-
-    # In[ ]:
-
-    import scipy.stats
-
-
-    # In[ ]:
-
-    for (datafile, estimator_name), scores in scores_values.iteritems():
-        scores_grid_ds.ix[datafile, (estimator_name + '_stats')] = scipy.stats.shapiro(scores)[1]
-
-
-    # In[ ]:
-
-    # scores_grid_ds
-
-
-    # In[ ]:
-
-    scores_grid_ds.to_csv(r'data/scores_grid_ds.csv', index=False)
-
-
-# In[ ]:
